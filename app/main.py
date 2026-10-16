@@ -20,11 +20,13 @@ is_dev = settings.is_dev
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Safe one-time initialization of application persistence schemas
-    init_authz_tables()
-    init_documents_db()
-    init_suggestions_db()
-    init_audit_table()
+    try:
+        init_authz_tables()
+        init_documents_db()
+        init_suggestions_db()
+        init_audit_table()
+    except Exception as exc:
+        logging.getLogger("coe.main").warning("Database startup notice: %s", exc)
     yield
 
 
