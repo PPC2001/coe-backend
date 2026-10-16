@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import json
 import logging
 import secrets
 import time
-from typing import Any
+from typing import Any, Set
 
 import redis
 from cryptography.fernet import Fernet

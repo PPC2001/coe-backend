@@ -9,7 +9,7 @@ from typing import Any
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger("coe.config")
@@ -66,9 +66,17 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 1000
 
     # Sessions
+    upstash_redis_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UPSTASH_REDIS_URL", "UPSTASH_REDIS_REST_URL", "KV_REST_API_URL"),
+    )
+    upstash_redis_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("UPSTASH_REDIS_TOKEN", "UPSTASH_REDIS_REST_TOKEN", "KV_REST_API_TOKEN"),
+    )
     redis_url: str = Field(
         default="redis://localhost:6379/0",
-        validation_alias=AliasChoices("REDIS_URL", "redis_url", "KV_URL", "UPSTASH_REDIS_URL"),
+        validation_alias=AliasChoices("REDIS_URL", "redis_url", "KV_URL"),
     )
     session_enc_key: str = ""
     cookie_secure: bool = False
@@ -130,6 +138,39 @@ class Settings(BaseSettings):
         if "*" in v:
             raise ValueError("Wildcard CORS origins are not allowed")
         return v
+
+    @model_validator(mode="after")
+    def resolve_redis_url(self) -> "Settings":
+        raw_upstash = self.upstash_redis_url
+        token = self.upstash_redis_token
+
+        # Check if UPSTASH_REDIS_URL was provided
+        if raw_upstash:
+            if raw_upstash.startswith(("redis://", "rediss://")):
+                self.redis_url = raw_upstash
+            else:
+                clean_host = raw_upstash.replace("https://", "").replace("http://", "").strip("/")
+                port = 6379
+                if ":" in clean_host:
+                    parts = clean_host.split(":")
+                    clean_host = parts[0]
+                    port = int(parts[1])
+                if token:
+                    self.redis_url = f"rediss://default:{token}@{clean_host}:{port}"
+                else:
+                    self.redis_url = f"rediss://{clean_host}:{port}"
+        elif self.redis_url.startswith(("http://", "https://")):
+            clean_host = self.redis_url.replace("https://", "").replace("http://", "").strip("/")
+            port = 6379
+            if ":" in clean_host:
+                parts = clean_host.split(":")
+                clean_host = parts[0]
+                port = int(parts[1])
+            if token:
+                self.redis_url = f"rediss://default:{token}@{clean_host}:{port}"
+            else:
+                self.redis_url = f"rediss://{clean_host}:{port}"
+        return self
 
     @property
     def effective_client_id(self) -> str:
