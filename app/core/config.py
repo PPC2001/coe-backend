@@ -169,7 +169,8 @@ class Settings(BaseSettings):
     def client_credential(self) -> dict[str, str] | str:
         """Certificate credential. Fallback to client secret if certificate not configured."""
         if self.client_cert_private_key:
-            return {"private_key": self.client_cert_private_key, "thumbprint": self.client_cert_thumbprint}
+            pk = self.client_cert_private_key.strip().replace("\\n", "\n")
+            return {"private_key": pk, "thumbprint": self.client_cert_thumbprint}
         if self.client_cert_private_key_path:
             p = Path(self.client_cert_private_key_path)
             if p.exists():
