@@ -13,3 +13,11 @@ wheels/
 # Secrets
 .env
 .env.vercel
+secrets/
+*.key
+*.pem
+*.crt
+
+# Databases
+*.db
+

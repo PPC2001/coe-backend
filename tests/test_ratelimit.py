@@ -3,7 +3,7 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from app.ratelimit import RateLimitMiddleware
+from app.core.ratelimit import RateLimitMiddleware
 
 
 def _app(limit: int) -> TestClient:

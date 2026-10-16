@@ -3,27 +3,20 @@ from functools import lru_cache
 from typing import Annotated, Callable
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
 from pydantic import BaseModel, Field
 
-from .config import Settings, get_settings
+from app.services.auth.session import load_session
+from app.core.config import Settings, get_settings
 
 logger = logging.getLogger("coe.security")
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-class CurrentUser(BaseModel):
-    oid: str                       # stable object id of the user in the tenant
-    tid: str                       # tenant id
-    sub: str                       # pairwise subject (unique per app)
-    name: str | None = None
-    username: str | None = None    # preferred_username (UPN / email); mutable, display only
-    scopes: list[str] = Field(default_factory=list)
-    roles: list[str] = Field(default_factory=list)
-    token: str = Field(repr=False)  # raw access token, needed for OBO; never serialized/logged
+from app.schemas.users import CurrentUser
 
 
 def _unauthorized(detail: str = "Invalid or missing access token") -> HTTPException:
@@ -83,31 +76,54 @@ def validate_access_token(token: str, settings: Settings) -> dict:
 
 
 def get_current_user(
+    request: Request,
     creds: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> CurrentUser:
-    # Deliberately a sync dependency: PyJWKClient does blocking HTTP on a cache miss and
-    # FastAPI runs sync dependencies in a thread pool, keeping the event loop free.
-    if creds is None or creds.scheme.lower() != "bearer":
-        raise _unauthorized()
+    # 1. Bearer Token Authentication (API clients & automated test suites)
+    if creds is not None and creds.scheme.lower() == "bearer":
+        claims = validate_access_token(creds.credentials, settings)
+        scopes = str(claims.get("scp", "")).split()
+        if settings.required_scope not in scopes:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Missing scope: {settings.required_scope}")
 
-    claims = validate_access_token(creds.credentials, settings)
+        roles = claims.get("roles", [])
+        return CurrentUser(
+            oid=claims["oid"],
+            tid=claims["tid"],
+            sub=claims["sub"],
+            name=claims.get("name"),
+            username=claims.get("preferred_username"),
+            scopes=scopes,
+            roles=roles if isinstance(roles, list) else [],
+            token=creds.credentials,
+        )
 
-    scopes = str(claims.get("scp", "")).split()
-    if settings.required_scope not in scopes:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, f"Missing scope: {settings.required_scope}")
+    # 2. BFF Session Cookie Authentication (Browser SPA sessions - Decision D2)
+    sid = request.cookies.get("__Host-coe_session") or request.cookies.get("coe_session")
+    if sid:
+        sess = load_session(sid)
+        if sess and sess.get("oid"):
+            roles = sess.get("roles")
+            if not roles:
+                try:
+                    from app.services.authz.authz_repo import resolve_roles
+                    snap = sess.get("authz", {})
+                    roles = sorted(list(resolve_roles(set(snap.get("groups", [])), sess["oid"])))
+                except Exception:
+                    roles = ["employee"]
+            return CurrentUser(
+                oid=sess["oid"],
+                tid=sess.get("tid", settings.tenant_id),
+                sub=sess.get("sub", sess["oid"]),
+                name=sess.get("name"),
+                username=sess.get("upn"),
+                scopes=[settings.required_scope, "access_as_user"],
+                roles=roles if isinstance(roles, list) else [],
+                token="",
+            )
 
-    roles = claims.get("roles", [])
-    return CurrentUser(
-        oid=claims["oid"],
-        tid=claims["tid"],
-        sub=claims["sub"],
-        name=claims.get("name"),
-        username=claims.get("preferred_username"),
-        scopes=scopes,
-        roles=roles if isinstance(roles, list) else [],
-        token=creds.credentials,
-    )
+    raise _unauthorized()
 
 
 def require_roles(*required: str) -> Callable[[CurrentUser], CurrentUser]:

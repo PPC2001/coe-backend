@@ -5,7 +5,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
-from app import security
+from app.core import security
 from app.main import app
 
 TENANT = "c472075b-7c10-4a14-8e44-3549e146c37a"
@@ -151,3 +151,29 @@ def test_cors_preflight_disallowed_origin():
         headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"},
     )
     assert "access-control-allow-origin" not in r.headers
+
+
+def test_auth_callback_fail_closed_on_graph_error(monkeypatch):
+    from unittest.mock import MagicMock, patch
+    from app.services.auth.session import FLOW_COOKIE, save_flow
+
+    mock_app = MagicMock()
+    mock_app.acquire_token_by_auth_code_flow.return_value = {
+        "access_token": "token-xyz",
+        "id_token_claims": {
+            "oid": "user-oid-1",
+            "tid": TENANT,
+            "name": "Test User",
+            "preferred_username": "test@enpointe.io",
+        },
+    }
+
+    flow = {"state": "state-123", "return_to": "/", "stepup": False}
+    flow_cookie_val = save_flow(flow)
+
+    with patch("app.api.routes.auth.build_msal", return_value=mock_app), \
+         patch("app.api.routes.auth.build_snapshot", side_effect=Exception("Graph 429 Throttled")):
+        client.cookies.set(FLOW_COOKIE, flow_cookie_val)
+        res = client.get("/api/auth/callback?code=fake-code&state=state-123")
+        assert res.status_code == 503
+        assert "Identity verification service temporarily unavailable" in res.json()["detail"]
