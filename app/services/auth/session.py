@@ -14,7 +14,13 @@ logger = logging.getLogger("coe.session")
 _s = get_settings()
 
 try:
-    _r = redis.Redis.from_url(_s.redis_url, decode_responses=True)
+    _r = redis.Redis.from_url(
+        _s.redis_url,
+        decode_responses=True,
+        socket_timeout=5.0,
+        socket_connect_timeout=5.0,
+        retry_on_timeout=True,
+    )
     # Quick connectivity verification
     _r.ping()
 except Exception as exc:

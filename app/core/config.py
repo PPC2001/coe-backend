@@ -42,14 +42,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     environment_name: ENVIRONMENT_NAME = Field(
-        default_factory=lambda: ENVIRONMENT_NAME.PROD if os.getenv("VERCEL") else ENVIRONMENT_NAME.DEV,
-        validation_alias=AliasChoices("ENVIRONMENT_NAME", "environment_name", "ENVIRONMENT"),
+        default=None,
+        validation_alias=AliasChoices("ENVIRONMENT_NAME", "environment_name"),
     )
     organization_name: str = "End Point IT Services Pvt Ltd"
 
     # Microsoft Entra single-app configuration
-    tenant_id: str = "c472075b-7c10-4a14-8e44-3549e146c37a"
-    client_id: str = "ba152ad5-0a02-4936-874e-06867afefd07"
+    tenant_id: str
+    client_id: str = "1e25729f-ed30-4262-8ae7-bea3abe9d376"
     api_client_id: str | None = None
     spa_client_id: str | None = None
     client_cert_thumbprint: str = ""
@@ -66,7 +66,10 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 1000
 
     # Sessions
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        validation_alias=AliasChoices("REDIS_URL", "redis_url", "KV_URL", "UPSTASH_REDIS_URL"),
+    )
     session_enc_key: str = ""
     cookie_secure: bool = False
     session_idle_minutes: int = 30
@@ -74,10 +77,8 @@ class Settings(BaseSettings):
     authz_refresh_minutes: int = 10
     max_sessions_per_user: int = 5
 
-    # Databases & persistence (use /tmp on Vercel/serverless environments)
-    identity_db_path: str = Field(
-        default_factory=lambda: "/tmp/identity_store.db" if (os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME")) else "identity_store.db"
-    )
+    # Databases & persistence
+    identity_db_path: str = "identity_store.db"
     required_scope: str = "access_as_user"
 
     # Delegated Microsoft Graph scopes
@@ -91,23 +92,17 @@ class Settings(BaseSettings):
     @classmethod
     def validate_env_name(cls, v: Any) -> ENVIRONMENT_NAME:
         if not v:
-            v = os.getenv("ENVIRONMENT_NAME") or os.getenv("environment_name") or os.getenv("ENVIRONMENT")
+            v = os.getenv("ENVIRONMENT_NAME") or os.getenv("environment_name")
         if not v:
-            return ENVIRONMENT_NAME.PROD if os.getenv("VERCEL") else ENVIRONMENT_NAME.DEV
+            raise ValueError("ENVIRONMENT_NAME is not found. Must be one of: DEV, QA, PROD")
         if isinstance(v, ENVIRONMENT_NAME):
             return v
         if isinstance(v, str):
             clean = v.strip().upper()
-            if clean in {"PRODUCTION", "PROD"}:
-                return ENVIRONMENT_NAME.PROD
-            if clean in {"DEVELOPMENT", "DEV"}:
-                return ENVIRONMENT_NAME.DEV
-            if clean in {"QA", "TEST", "TESTING"}:
-                return ENVIRONMENT_NAME.QA
             if clean in ENVIRONMENT_NAME.__members__:
                 return ENVIRONMENT_NAME[clean]
-            return ENVIRONMENT_NAME.PROD if os.getenv("VERCEL") else ENVIRONMENT_NAME.DEV
-        return ENVIRONMENT_NAME.DEV
+            raise ValueError(f"ENVIRONMENT_NAME '{clean}' is invalid. Must be one of: DEV, QA, PROD")
+        raise ValueError("ENVIRONMENT_NAME is not found. Must be one of: DEV, QA, PROD")
 
     @property
     def is_dev(self) -> bool:
@@ -187,7 +182,7 @@ class Settings(BaseSettings):
         sec = self.client_secret or self.api_client_secret
         if sec:
             return sec
-        if self.is_dev or os.getenv("VERCEL"):
+        if self.is_dev:
             return {"private_key": _DEV_RSA_PRIVATE_PEM, "thumbprint": "DEV_EPHEMERAL_CERT"}
         raise RuntimeError("Set CLIENT_CERT_PRIVATE_KEY or CLIENT_CERT_PRIVATE_KEY_PATH (or CLIENT_SECRET)")
 
@@ -195,10 +190,10 @@ class Settings(BaseSettings):
     def fernet_key(self) -> str:
         if self.session_enc_key and len(self.session_enc_key.strip()) >= 32:
             return self.session_enc_key.strip()
-        if self.is_dev or os.getenv("VERCEL"):
-            logger.warning("Using ephemeral Fernet session encryption key for environment")
+        if self.is_dev:
+            logger.warning("Using ephemeral Fernet session encryption key for development")
             return _DEV_FERNET_KEY
-        return _DEV_FERNET_KEY
+        raise RuntimeError("SESSION_ENC_KEY must be set in production")
 
 
 @lru_cache
