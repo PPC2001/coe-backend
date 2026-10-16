@@ -80,7 +80,9 @@ app.add_middleware(
 )
 
 
+@app.get("/")
 @app.get("/health")
+@app.get("/api/health")
 def health() -> dict:
     return {
         "status": "ok",
